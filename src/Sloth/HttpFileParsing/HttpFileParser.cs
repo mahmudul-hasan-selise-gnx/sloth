@@ -50,7 +50,7 @@ internal sealed class HttpFileParser : IHttpFileParser
         for (var index = 0; index <= lines.Count; index++)
         {
             var isLastLine = index == lines.Count;
-            var isSeparator = !isLastLine && lines[index].Trim() == "###";
+            var isSeparator = !isLastLine && IsSeparatorLine(lines[index]);
             if (!isLastLine && !isSeparator)
             {
                 continue;
@@ -172,7 +172,12 @@ internal sealed class HttpFileParser : IHttpFileParser
     private static bool IsCommentLine(string line)
     {
         var trimmed = line.TrimStart();
-        return trimmed.StartsWith("###", StringComparison.Ordinal) && trimmed.Trim() != "###";
+        return trimmed.StartsWith('#') && !IsSeparatorLine(trimmed);
+    }
+
+    private static bool IsSeparatorLine(string line)
+    {
+        return line.TrimStart().StartsWith("###", StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<string> SplitLines(string content)
