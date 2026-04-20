@@ -88,7 +88,7 @@ internal sealed class HttpFileParser : IHttpFileParser
         var requestLineIndex = -1;
         for (var index = startIndex; index < endIndexExclusive; index++)
         {
-            if (!string.IsNullOrWhiteSpace(lines[index]))
+            if (!string.IsNullOrWhiteSpace(lines[index]) && !IsCommentLine(lines[index]))
             {
                 requestLineIndex = index;
                 break;
@@ -138,6 +138,11 @@ internal sealed class HttpFileParser : IHttpFileParser
                     continue;
                 }
 
+                if (IsCommentLine(line))
+                {
+                    continue;
+                }
+
                 var separatorIndex = line.IndexOf(':');
                 if (separatorIndex <= 0)
                 {
@@ -162,6 +167,12 @@ internal sealed class HttpFileParser : IHttpFileParser
 
         var body = bodyLines.Count > 0 ? string.Join(Environment.NewLine, bodyLines) : null;
         requests.Add(new HttpRequestDefinition(method, uri, headers, body));
+    }
+
+    private static bool IsCommentLine(string line)
+    {
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("###", StringComparison.Ordinal) && trimmed.Trim() != "###";
     }
 
     private static IReadOnlyList<string> SplitLines(string content)
