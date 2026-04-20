@@ -24,6 +24,8 @@ internal sealed class HttpClientRequestExecutor : IRequestExecutor
         for (var index = 0; index < document.Requests.Count; index++)
         {
             var requestDefinition = document.Requests[index];
+            RequestExecutionOutcome? outcome = null;
+            RequestExecutionFailure? failure = null;
 
             try
             {
@@ -34,42 +36,53 @@ internal sealed class HttpClientRequestExecutor : IRequestExecutor
                 using var response = await _httpClient.SendAsync(request, timeoutCts.Token);
                 var responseBody = await response.Content.ReadAsStringAsync(timeoutCts.Token);
 
-                outcomes.Add(new RequestExecutionOutcome(
+                outcome = new RequestExecutionOutcome(
                     RequestIndex: index,
                     Request: requestDefinition,
                     StatusCode: response.StatusCode,
                     Headers: MergeHeaders(response.Headers, response.Content.Headers),
-                    Body: responseBody));
+                    Body: responseBody);
+
+                outcomes.Add(outcome);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                failures.Add(new RequestExecutionFailure(
+                failure = new RequestExecutionFailure(
                     RequestIndex: index,
                     Request: requestDefinition,
                     Error: "Execution cancelled.",
                     IsTimeout: false,
-                    IsCanceled: true));
+                    IsCanceled: true);
+
+                failures.Add(failure);
+                options.Progress?.Report(new RequestExecutionProgress(index + 1, document.Requests.Count, outcome, failure));
 
                 break;
             }
             catch (OperationCanceledException)
             {
-                failures.Add(new RequestExecutionFailure(
+                failure = new RequestExecutionFailure(
                     RequestIndex: index,
                     Request: requestDefinition,
                     Error: $"Request timed out after {options.RequestTimeout.TotalSeconds:0.###}s.",
                     IsTimeout: true,
-                    IsCanceled: false));
+                    IsCanceled: false);
+
+                failures.Add(failure);
             }
             catch (Exception ex)
             {
-                failures.Add(new RequestExecutionFailure(
+                failure = new RequestExecutionFailure(
                     RequestIndex: index,
                     Request: requestDefinition,
                     Error: ex.Message,
                     IsTimeout: false,
-                    IsCanceled: false));
+                    IsCanceled: false);
+
+                failures.Add(failure);
             }
+
+            options.Progress?.Report(new RequestExecutionProgress(index + 1, document.Requests.Count, outcome, failure));
         }
 
         return new ExecutionResult(outcomes, failures);
