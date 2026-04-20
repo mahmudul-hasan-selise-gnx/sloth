@@ -95,7 +95,7 @@ internal sealed class CommandLineParser : ICommandLineParser
 
             if (!_optionRegistry.TryGet(token, out var option))
             {
-                if (token.StartsWith('-', StringComparison.Ordinal))
+                if (token.StartsWith("-", StringComparison.Ordinal))
                 {
                     return ParseResult.Error($"Unknown option '{token}'.", HelpText);
                 }
@@ -129,7 +129,7 @@ internal sealed class CommandLineParser : ICommandLineParser
             }
 
             var value = args[++index];
-            if (value.StartsWith('-', StringComparison.Ordinal))
+            if (value.StartsWith("-", StringComparison.Ordinal))
             {
                 return ParseResult.Error($"Option '{token}' expects a value.", HelpText);
             }
