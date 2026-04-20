@@ -283,6 +283,7 @@ internal sealed class RunService : IRunService
         Console.WriteLine($"Parsed {document.Requests.Count} request(s) from '{options.InputPath}'.");
 
         var progressReporter = new ConsoleExecutionProgressReporter();
+        progressReporter.Start(document.Requests.Count);
         var executionOptions = RequestExecutionOptions.Default with
         {
             Progress = progressReporter
@@ -310,29 +311,39 @@ internal sealed class RunService : IRunService
 internal sealed class ConsoleExecutionProgressReporter : IProgress<RequestExecutionProgress>
 {
     private const int BarWidth = 32;
+    private const int ClearWidth = 180;
     private readonly Lock _lock = new();
+    private int _totalCount;
 
     public void Report(RequestExecutionProgress progress)
     {
         var progressBar = BuildProgressBar(progress.CompletedCount, progress.TotalCount);
         lock (_lock)
         {
-            Console.Write($"\r{progressBar}");
-            Console.WriteLine();
+            _totalCount = progress.TotalCount;
+            ClearCurrentLine();
 
             if (progress.Outcome is not null)
             {
-                Console.WriteLine($"  ✓ [{progress.Outcome.RequestIndex + 1}] {(int)progress.Outcome.StatusCode} {progress.Outcome.StatusCode}");
+                var outcome = progress.Outcome;
+                Console.WriteLine($"  ✓ [{outcome.RequestIndex + 1}] {outcome.Request.Method} {outcome.Request.Url} -> {(int)outcome.StatusCode} {outcome.StatusCode}");
             }
             else if (progress.Failure is not null)
             {
-                Console.WriteLine($"  ✗ [{progress.Failure.RequestIndex + 1}] {progress.Failure.Error}");
+                var failure = progress.Failure;
+                Console.WriteLine($"  ✗ [{failure.RequestIndex + 1}] {failure.Request.Method} {failure.Request.Url} -> {failure.Error}");
             }
 
-            if (progress.CompletedCount < progress.TotalCount)
-            {
-                Console.Write($"\r{progressBar}");
-            }
+            Console.Write(progressBar);
+        }
+    }
+
+    public void Start(int totalCount)
+    {
+        lock (_lock)
+        {
+            _totalCount = totalCount;
+            Console.Write(BuildProgressBar(0, totalCount));
         }
     }
 
@@ -340,6 +351,11 @@ internal sealed class ConsoleExecutionProgressReporter : IProgress<RequestExecut
     {
         lock (_lock)
         {
+            if (_totalCount == 0)
+            {
+                Console.Write(BuildProgressBar(0, 0));
+            }
+
             Console.WriteLine();
         }
     }
@@ -358,5 +374,12 @@ internal sealed class ConsoleExecutionProgressReporter : IProgress<RequestExecut
         var percent = progressRatio * 100;
 
         return $"[{new string('#', filledWidth)}{new string('-', emptyWidth)}] {completedCount}/{totalCount} ({percent,5:0.0}%)";
+    }
+
+    private static void ClearCurrentLine()
+    {
+        Console.Write('\r');
+        Console.Write(new string(' ', ClearWidth));
+        Console.Write('\r');
     }
 }
