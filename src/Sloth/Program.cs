@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Sloth.HttpFileParsing;
 
 return await new CompositionRoot().RunAsync(args, CancellationToken.None);
 
@@ -19,7 +20,7 @@ internal sealed class CompositionRoot
         });
 
         _parser = new CommandLineParser(optionRegistry);
-        _runService = new RunService();
+        _runService = new RunService(new HttpFileParser());
     }
 
     public async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
@@ -252,11 +253,30 @@ internal interface IRunService
 
 internal sealed class RunService : IRunService
 {
+    private readonly IHttpFileParser _httpFileParser;
+
+    public RunService(IHttpFileParser httpFileParser)
+    {
+        _httpFileParser = httpFileParser;
+    }
+
     public Task<int> RunAsync(RunOptions options, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        Console.WriteLine($"Running with '{options.InputPath}'.");
+        var parseResult = _httpFileParser.ParseFile(options.InputPath);
+        if (!parseResult.IsSuccess)
+        {
+            Console.WriteLine("Error: Failed to parse input file.");
+            foreach (var error in parseResult.Errors)
+            {
+                Console.WriteLine($"  - {error}");
+            }
+
+            return Task.FromResult(1);
+        }
+
+        Console.WriteLine($"Parsed {parseResult.Document!.Requests.Count} request(s) from '{options.InputPath}'.");
 
         if (!string.IsNullOrWhiteSpace(options.OutputPath))
         {
