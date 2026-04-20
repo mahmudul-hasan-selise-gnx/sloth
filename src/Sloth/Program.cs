@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using Sloth.Execution;
 using Sloth.HttpFileParsing;
+using Sloth.Output;
 
 return await new CompositionRoot().RunAsync(args, CancellationToken.None);
 
@@ -21,7 +22,20 @@ internal sealed class CompositionRoot
         });
 
         _parser = new CommandLineParser(optionRegistry);
-        _runService = new RunService(new HttpFileParser(), new HttpClientRequestExecutor(new HttpClient()));
+        var formatterRegistry = new OutputFormatterRegistry(
+            new Dictionary<string, IOutputFormatter>(StringComparer.OrdinalIgnoreCase)
+            {
+                [".json"] = new JsonOutputFormatter(),
+                [".txt"] = new TextOutputFormatter()
+            },
+            defaultFormatter: new TextOutputFormatter());
+
+        var outputWriterFactory = new OutputWriterFactory(new OutputPathPolicy());
+        _runService = new RunService(
+            new HttpFileParser(),
+            new HttpClientRequestExecutor(new HttpClient()),
+            formatterRegistry,
+            outputWriterFactory);
     }
 
     public async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
@@ -256,55 +270,100 @@ internal sealed class RunService : IRunService
 {
     private readonly IHttpFileParser _httpFileParser;
     private readonly IRequestExecutor _requestExecutor;
+    private readonly IOutputFormatterRegistry _outputFormatterRegistry;
+    private readonly IOutputWriterFactory _outputWriterFactory;
 
-    public RunService(IHttpFileParser httpFileParser, IRequestExecutor requestExecutor)
+    public RunService(
+        IHttpFileParser httpFileParser,
+        IRequestExecutor requestExecutor,
+        IOutputFormatterRegistry outputFormatterRegistry,
+        IOutputWriterFactory outputWriterFactory)
     {
         _httpFileParser = httpFileParser;
         _requestExecutor = requestExecutor;
+        _outputFormatterRegistry = outputFormatterRegistry;
+        _outputWriterFactory = outputWriterFactory;
     }
 
     public async Task<int> RunAsync(RunOptions options, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var parseResult = _httpFileParser.ParseFile(options.InputPath);
-        if (!parseResult.IsSuccess)
+        try
         {
-            Console.WriteLine("Error: Failed to parse input file.");
-            foreach (var error in parseResult.Errors)
+            await using var outputWriter = _outputWriterFactory.Create(options);
+            var outputFormatter = _outputFormatterRegistry.Resolve(options.OutputPath);
+            var useConsoleProgress = string.IsNullOrWhiteSpace(options.OutputPath);
+
+            var parseResult = _httpFileParser.ParseFile(options.InputPath);
+            if (!parseResult.IsSuccess)
             {
-                Console.WriteLine($"  - {error}");
+                var parseFailureDocument = new OutputDocument(
+                    InputPath: options.InputPath,
+                    IsSuccess: false,
+                    ParsedRequestCount: 0,
+                    ExecutedRequestCount: 0,
+                    SucceededCount: 0,
+                    FailedCount: parseResult.Errors.Count,
+                    Outcomes: [],
+                    Failures: [],
+                    ParseErrors: parseResult.Errors);
+
+                await outputWriter.WriteAsync(outputFormatter.Format(parseFailureDocument), cancellationToken);
+                return 1;
             }
 
+            var document = parseResult.Document!;
+            ConsoleExecutionProgressReporter? progressReporter = null;
+            var executionOptions = RequestExecutionOptions.Default;
+            if (useConsoleProgress)
+            {
+                progressReporter = new ConsoleExecutionProgressReporter();
+                progressReporter.Start(document.Requests.Count);
+                executionOptions = executionOptions with
+                {
+                    Progress = progressReporter
+                };
+            }
+
+            var executionResult = await _requestExecutor.ExecuteAsync(
+                document,
+                executionOptions,
+                cancellationToken);
+
+            progressReporter?.Complete();
+
+            var outputDocument = new OutputDocument(
+                InputPath: options.InputPath,
+                IsSuccess: executionResult.IsSuccess,
+                ParsedRequestCount: document.Requests.Count,
+                ExecutedRequestCount: executionResult.Outcomes.Count + executionResult.Failures.Count,
+                SucceededCount: executionResult.Outcomes.Count,
+                FailedCount: executionResult.Failures.Count,
+                Outcomes: executionResult.Outcomes.Select(outcome => new OutputOutcomeDocument(
+                    RequestIndex: outcome.RequestIndex,
+                    Method: outcome.Request.Method,
+                    Url: outcome.Request.Url,
+                    StatusCode: (int)outcome.StatusCode,
+                    Headers: outcome.Headers,
+                    Body: outcome.Body)).ToArray(),
+                Failures: executionResult.Failures.Select(failure => new OutputFailureDocument(
+                    RequestIndex: failure.RequestIndex,
+                    Method: failure.Request.Method,
+                    Url: failure.Request.Url,
+                    Error: failure.Error,
+                    IsTimeout: failure.IsTimeout,
+                    IsCanceled: failure.IsCanceled)).ToArray(),
+                ParseErrors: []);
+
+            await outputWriter.WriteAsync(outputFormatter.Format(outputDocument), cancellationToken);
+            return executionResult.IsSuccess ? 0 : 1;
+        }
+        catch (InvalidOperationException ex)
+        {
+            Console.WriteLine($"Error: {ex.Message}");
             return 1;
         }
-
-        var document = parseResult.Document!;
-        Console.WriteLine($"Parsed {document.Requests.Count} request(s) from '{options.InputPath}'.");
-
-        var progressReporter = new ConsoleExecutionProgressReporter();
-        progressReporter.Start(document.Requests.Count);
-        var executionOptions = RequestExecutionOptions.Default with
-        {
-            Progress = progressReporter
-        };
-
-        var executionResult = await _requestExecutor.ExecuteAsync(
-            document,
-            executionOptions,
-            cancellationToken);
-
-        progressReporter.Complete();
-
-        Console.WriteLine($"Executed {document.Requests.Count} request(s): {executionResult.Outcomes.Count} succeeded, {executionResult.Failures.Count} failed.");
-
-        if (!string.IsNullOrWhiteSpace(options.OutputPath))
-        {
-            var overwriteText = options.OverwriteOutput ? "overwrite enabled" : "overwrite disabled";
-            Console.WriteLine($"Output: '{options.OutputPath}' ({overwriteText}).");
-        }
-
-        return executionResult.IsSuccess ? 0 : 1;
     }
 }
 
