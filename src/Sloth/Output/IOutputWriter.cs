@@ -1,3 +1,5 @@
+using Sloth.Domain;
+
 namespace Sloth.Output;
 
 internal interface IOutputWriter : IAsyncDisposable
