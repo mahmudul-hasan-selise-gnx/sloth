@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Sloth.Execution;
 using Sloth.HttpFileParsing;
 
 return await new CompositionRoot().RunAsync(args, CancellationToken.None);
@@ -20,7 +21,7 @@ internal sealed class CompositionRoot
         });
 
         _parser = new CommandLineParser(optionRegistry);
-        _runService = new RunService(new HttpFileParser());
+        _runService = new RunService(new HttpFileParser(), new HttpClientRequestExecutor(new HttpClient()));
     }
 
     public async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
@@ -254,13 +255,15 @@ internal interface IRunService
 internal sealed class RunService : IRunService
 {
     private readonly IHttpFileParser _httpFileParser;
+    private readonly IRequestExecutor _requestExecutor;
 
-    public RunService(IHttpFileParser httpFileParser)
+    public RunService(IHttpFileParser httpFileParser, IRequestExecutor requestExecutor)
     {
         _httpFileParser = httpFileParser;
+        _requestExecutor = requestExecutor;
     }
 
-    public Task<int> RunAsync(RunOptions options, CancellationToken cancellationToken)
+    public async Task<int> RunAsync(RunOptions options, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -273,10 +276,28 @@ internal sealed class RunService : IRunService
                 Console.WriteLine($"  - {error}");
             }
 
-            return Task.FromResult(1);
+            return 1;
         }
 
-        Console.WriteLine($"Parsed {parseResult.Document!.Requests.Count} request(s) from '{options.InputPath}'.");
+        var document = parseResult.Document!;
+        Console.WriteLine($"Parsed {document.Requests.Count} request(s) from '{options.InputPath}'.");
+
+        var executionResult = await _requestExecutor.ExecuteAsync(
+            document,
+            RequestExecutionOptions.Default,
+            cancellationToken);
+
+        Console.WriteLine($"Executed {document.Requests.Count} request(s): {executionResult.Outcomes.Count} succeeded, {executionResult.Failures.Count} failed.");
+
+        foreach (var outcome in executionResult.Outcomes)
+        {
+            Console.WriteLine($"  ✓ [{outcome.RequestIndex + 1}] {(int)outcome.StatusCode} {outcome.StatusCode}");
+        }
+
+        foreach (var failure in executionResult.Failures)
+        {
+            Console.WriteLine($"  ✗ [{failure.RequestIndex + 1}] {failure.Error}");
+        }
 
         if (!string.IsNullOrWhiteSpace(options.OutputPath))
         {
@@ -284,6 +305,6 @@ internal sealed class RunService : IRunService
             Console.WriteLine($"Output: '{options.OutputPath}' ({overwriteText}).");
         }
 
-        return Task.FromResult(0);
+        return executionResult.IsSuccess ? 0 : 1;
     }
 }
